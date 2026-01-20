@@ -1,0 +1,5 @@
+streamlit
+python-dotenv
+pandas
+openpyxl
+xlrd>=2.0.1
