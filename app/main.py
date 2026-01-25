@@ -2,6 +2,7 @@ import pandas as pd
 from datetime import datetime
 from openpyxl import load_workbook
 from openpyxl.styles import PatternFill
+from openpyxl.styles import Font
 
 # from procare_processor import process_procare
 # from dhs_processor import process_dhs
@@ -20,10 +21,19 @@ COLOR_MAP = {
     "Void Transaction": YELLOW,
     "Void & Update Transaction": YELLOW,
     "Inform Parent": YELLOW,
-    "Update Procare": YELLOW
+    "Update Procare": YELLOW,
+    "Not Swiped IN": RED,
+    "Not Swiped OUT": RED,
+    "Not Swiped BOTH": RED
 }
 
 # ================== TIME HELPERS ==================
+def not_swiped_reason(p_in, p_out):
+    if not p_in and p_out:
+        return "Not Swiped IN"
+    if p_in and not p_out:
+        return "Not Swiped OUT"
+    return "Not Swiped BOTH"
 def parse_time(t):
     try:
         return datetime.strptime(t, "%H:%M").time()
@@ -79,6 +89,7 @@ def run_pipeline(
     output_file
 ):
     # ---------- READ EXCELS (SADECE BURADA) ----------
+    procare_top_rows = pd.read_excel(procare_file, header=None, nrows=3)
     procare_header = pd.read_excel(procare_file, header=None).iloc[0, 0]
     df_procare_raw = pd.read_excel(procare_file, header=8)
 
@@ -144,10 +155,17 @@ def run_pipeline(
         if p_in and not p_out and has_dhs_complete:
             return "Update Procare", YELLOW, final_in, final_out
 
+        # if has_procare_any and not has_procare_complete:
+        #     if has_dhs_any:
+        #         return "Void Transaction", YELLOW, final_in, final_out
+        #     return "Not Swiped", RED, final_in, final_out
+
         if has_procare_any and not has_procare_complete:
             if has_dhs_any:
                 return "Void Transaction", YELLOW, final_in, final_out
-            return "Not Swiped", RED, final_in, final_out
+
+            return not_swiped_reason(d_in, d_out), RED, final_in, final_out
+
 
         responses = []
         if d_row is not None:
@@ -157,10 +175,10 @@ def run_pipeline(
             ]
 
         if all(is_dd(r) for r in responses if r):
-            return "Not Swiped", RED, final_in, final_out
+            return not_swiped_reason(d_in, d_out), RED, final_in, final_out
 
         if not has_dhs_complete:
-            return "Not Swiped", RED, final_in, final_out
+            return not_swiped_reason(d_in, d_out), RED, final_in, final_out
 
         valid = in_range(p_in, start, end) and in_range(p_out, start, end)
 
@@ -229,6 +247,8 @@ def run_pipeline(
 
     # ---------- WRITE FINAL ----------
     df = pd.DataFrame(rows)
+    df = df.sort_values(by="Full Name", kind="stable").reset_index(drop=True)
+
     df.drop(columns=["M_Color", "A_Color"]).to_excel(output_file, index=False)
 
     wb = load_workbook(output_file)
@@ -237,18 +257,75 @@ def run_pipeline(
     for i, row in df.iterrows():
         r = i + 2
 
-        if row["M_Color"]:
-            ws[f"D{r}"].fill = row["M_Color"]
-            ws[f"E{r}"].fill = row["M_Color"]
+        # if row["M_Color"]:
+        #     ws[f"D{r}"].fill = row["M_Color"]
+        #     ws[f"E{r}"].fill = row["M_Color"]
 
-        if row["Morning_Response"] in COLOR_MAP:
-            ws[f"F{r}"].fill = COLOR_MAP[row["Morning_Response"]]
+        # if row["Morning_Response"] in COLOR_MAP:
+        #     ws[f"F{r}"].fill = COLOR_MAP[row["Morning_Response"]]
 
-        if row["A_Color"]:
-            ws[f"G{r}"].fill = row["A_Color"]
-            ws[f"H{r}"].fill = row["A_Color"]
+        # if row["A_Color"]:
+        #     ws[f"G{r}"].fill = row["A_Color"]
+        #     ws[f"H{r}"].fill = row["A_Color"]
 
-        if row["Afternoon_Response"] in COLOR_MAP:
-            ws[f"I{r}"].fill = COLOR_MAP[row["Afternoon_Response"]]
+        # if row["Afternoon_Response"] in COLOR_MAP:
+        #     ws[f"I{r}"].fill = COLOR_MAP[row["Afternoon_Response"]]
 
+        # ===== MORNING =====
+        mr = row["Morning_Response"]
+
+        if mr == "Not Swiped IN":
+            ws[f"D{r}"].fill = RED      # IN
+            ws[f"E{r}"].fill = GREEN    # OUT
+
+        elif mr == "Not Swiped OUT":
+            ws[f"D{r}"].fill = GREEN
+            ws[f"E{r}"].fill = RED
+
+        elif mr == "Not Swiped BOTH":
+            ws[f"D{r}"].fill = RED
+            ws[f"E{r}"].fill = RED
+
+        else:
+            if row["M_Color"]:
+                ws[f"D{r}"].fill = row["M_Color"]
+                ws[f"E{r}"].fill = row["M_Color"]
+
+        if mr in COLOR_MAP:
+            ws[f"F{r}"].fill = COLOR_MAP[mr]
+
+        # ===== AFTERNOON =====
+        ar = row["Afternoon_Response"]
+
+        if ar == "Not Swiped IN":
+            ws[f"G{r}"].fill = RED
+            ws[f"H{r}"].fill = GREEN
+
+        elif ar == "Not Swiped OUT":
+            ws[f"G{r}"].fill = GREEN
+            ws[f"H{r}"].fill = RED
+
+        elif ar == "Not Swiped BOTH":
+            ws[f"G{r}"].fill = RED
+            ws[f"H{r}"].fill = RED
+
+        else:
+            if row["A_Color"]:
+                ws[f"G{r}"].fill = row["A_Color"]
+                ws[f"H{r}"].fill = row["A_Color"]
+
+        if ar in COLOR_MAP:
+            ws[f"I{r}"].fill = COLOR_MAP[ar]
+
+            
+    ws.insert_rows(1, amount=3)
+
+    bold_font = Font(bold=True)
+
+    # procare ilk 3 satırı yaz + bold
+    for r in range(3):
+        for c, val in enumerate(procare_top_rows.iloc[r]):
+            cell = ws.cell(row=r + 1, column=c + 1, value=val)
+            cell.font = bold_font
+            
     wb.save(output_file)
